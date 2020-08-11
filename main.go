@@ -7,7 +7,6 @@ import (
 	"time"
 	// "io/ioutil"
 	"os"
-	// "reflect"
 	"text/tabwriter"
 
 	log "github.com/sirupsen/logrus"
@@ -22,25 +21,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
-	// "k8s.io/apimachinery/pkg/util/runtime"
-	// "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	// "k8s.io/client-go/util/workqueue"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 type patchStringValue struct {
-	Op   string `json:"op"`
-	Path string `json:"path"`
-	// Value string `json:"value"`
+	Op    string      `json:"op"`
+	Path  string      `json:"path"`
 	Value interface{} `json:"value"`
 }
 
 const (
-	duration string = "5m"
+	duration string = "1m"
 )
 
 var (
@@ -58,7 +53,8 @@ func init() {
 
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel)
+	// log.SetLevel(log.InfoLevel)
+	log.SetLevel(log.DebugLevel)
 
 	folderID = os.Getenv("YANDEX_CLOUD_FOLDER_ID")
 
@@ -97,6 +93,7 @@ func main() {
 	var err error
 	var versionFlag bool
 	var version, commitID string
+	var now time.Time = time.Now()
 
 	pflag.BoolVar(&versionFlag, "version", false, "return application version")
 	pflag.Parse()
@@ -133,6 +130,13 @@ func main() {
 	// create controller
 	_, controller := cache.NewInformer(nodeListWatcher, &v1.Node{}, 0, cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
+			if time.Since(now) < timeout {
+				err := addLabel(obj.(*v1.Node).ObjectMeta.Name)
+				if err != nil {
+					log.Errorf("initial node label update failed: %s", err)
+				}
+			}
+
 			err := processNode(obj)
 			if err != nil {
 				log.Errorf("node label update failed: %s", err)
@@ -183,6 +187,8 @@ func processNode(obj interface{}) error {
 }
 
 func delLabel(nodeName string) error {
+	log.Debug("execute node label delete step")
+
 	node, err := clientset.CoreV1().Nodes().Get(
 		context.TODO(),
 		nodeName,
@@ -228,7 +234,7 @@ func delLabel(nodeName string) error {
 }
 
 func addLabel(nodeName string) error {
-	log.Infof("adding label to %s node", nodeName)
+	log.Debug("execute node label add step")
 
 	instances, err := getComputeInstances()
 	if err != nil {
@@ -243,6 +249,8 @@ func addLabel(nodeName string) error {
 		}
 
 		if instanceName := instance.Name; nodeName == instanceName && externalIP != "" {
+			log.Infof("adding label to %s node", nodeName)
+
 			payload := []patchStringValue{{
 				Op: "replace",
 				// https://stackoverflow.com/a/52725673
@@ -276,6 +284,8 @@ func addLabel(nodeName string) error {
 }
 
 func getComputeInstances() ([]*compute.Instance, error) {
+	log.Debug("get yandex cloud instances list")
+
 	resp, err := sdk.Compute().Instance().List(
 		context.TODO(),
 		&compute.ListInstancesRequest{
