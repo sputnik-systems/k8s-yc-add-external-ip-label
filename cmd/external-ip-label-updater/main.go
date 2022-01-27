@@ -74,16 +74,25 @@ func main() {
 		log.Fatalf("failed to create kube client: %s", err)
 	}
 
+	now := time.Now()
 	nodeListWatcher := cache.NewListWatchFromClient(
 		cli.CoreV1().RESTClient(), "nodes", v1.NamespaceAll, fields.Everything())
 	_, controller := cache.NewInformer(nodeListWatcher, &v1.Node{}, 0, cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			if err := updateNodesLabel(ctx, obj, cli, sdk, delayDuration, *folderId, *labelKey); err != nil {
+			// we should update labels on all nodes after downtime
+			// or in first run cases
+			if time.Since(now) < delayDuration {
+				if err := updateNodesLabel(ctx, true, obj, cli, sdk, delayDuration, *folderId, *labelKey); err != nil {
+					log.Printf("[error] node label update failed: %s", err)
+				}
+			}
+
+			if err := updateNodesLabel(ctx, false, obj, cli, sdk, delayDuration, *folderId, *labelKey); err != nil {
 				log.Printf("[error] node label update failed: %s", err)
 			}
 		},
 		UpdateFunc: func(_, obj interface{}) {
-			if err := updateNodesLabel(ctx, obj, cli, sdk, delayDuration, *folderId, *labelKey); err != nil {
+			if err := updateNodesLabel(ctx, false, obj, cli, sdk, delayDuration, *folderId, *labelKey); err != nil {
 				log.Printf("[error] node label update failed: %s", err)
 			}
 		},
@@ -141,7 +150,7 @@ func getNodeReadyCondition(node *v1.Node) *v1.NodeCondition {
 	return nil
 }
 
-func updateNodesLabel(ctx context.Context, obj interface{}, cli *kubernetes.Clientset, sdk *ycsdk.SDK, delay time.Duration, folderId, label string) error {
+func updateNodesLabel(ctx context.Context, init bool, obj interface{}, cli *kubernetes.Clientset, sdk *ycsdk.SDK, delay time.Duration, folderId, label string) error {
 	node := obj.(*v1.Node)
 	ready := getNodeReadyCondition(node)
 
@@ -152,7 +161,7 @@ func updateNodesLabel(ctx context.Context, obj interface{}, cli *kubernetes.Clie
 	if ready.Status == v1.ConditionTrue {
 		// if condition changes is only headbeat reason
 		// skip proccessing
-		if time.Since(ready.LastTransitionTime.Time) > delay {
+		if !init && time.Since(ready.LastTransitionTime.Time) > delay {
 			log.Printf(
 				"[skip] instance %s ready transition time [%s]",
 				node.ObjectMeta.Name,
